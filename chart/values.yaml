@@ -5,9 +5,8 @@ image:
   # main - matches this repo's actual location, not the upstream assignment
   # repo it was cloned from.
   repository: ghcr.io/varkey/tyk-task
-  # Defaults to .Chart.AppVersion when empty.
-  tag: ""
-  pullPolicy: IfNotPresent
+  tag: latest
+  pullPolicy: Always
 
 imagePullSecrets: []
 

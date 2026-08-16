@@ -49,7 +49,8 @@ Current coverage: `internal/k8shealth` 100%, `internal/authn` 95%,
 
 ## CI/CD
 
-`.github/workflows/ci.yml`, on every push/PR:
+`.github/workflows/ci-golang.yml` and `.github/workflows/ci-chart.yml`, on
+every push/PR:
 
 - **test** - `go build`, `go vet`, `go test -race -cover`
 - **lint** - `golangci-lint`
