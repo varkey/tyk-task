@@ -1,0 +1,100 @@
+{{- if .Values.rbac.create }}
+
+{{- if .Values.rbac.clusterScoped }}
+---
+# Story 1: read Deployments cluster-wide to compute replica health.
+# Story 2: manage NetworkPolicies cluster-wide to enact/reverse isolation.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tyk-sre-assignment.fullname" . }}
+  labels:
+    {{- include "tyk-sre-assignment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tyk-sre-assignment.fullname" . }}
+  labels:
+    {{- include "tyk-sre-assignment.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "tyk-sre-assignment.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tyk-sre-assignment.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- else }}
+{{- range .Values.rbac.namespaces }}
+---
+# Namespaced alternative: same verbs as the cluster-scoped ClusterRole above,
+# but confined to {{ . }}. A Role/RoleBinding here never authorizes a
+# cluster-wide list, however many namespaces are listed in rbac.namespaces -
+# the apiserver denies that outright rather than narrowing it, so
+# deployment.yaml also passes this same list to the container as
+# --namespaces, and the app iterates per namespace instead of trying to list
+# cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tyk-sre-assignment.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "tyk-sre-assignment.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tyk-sre-assignment.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "tyk-sre-assignment.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "tyk-sre-assignment.fullname" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tyk-sre-assignment.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.auth.enabled }}
+---
+# Lets the service validate caller bearer tokens (TokenReview) and check the
+# caller's own RBAC for the action being requested (SubjectAccessReview).
+# system:auth-delegator is the built-in role scoped to exactly those two
+# verbs - it grants no access to any other cluster resource. See README for
+# why this alone doesn't shrink the service's own standing RBAC above.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tyk-sre-assignment.fullname" . }}-auth-delegator
+  labels:
+    {{- include "tyk-sre-assignment.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tyk-sre-assignment.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

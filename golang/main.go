@@ -4,68 +4,81 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/varkey/tyk-task/golang/internal/api"
+	"github.com/varkey/tyk-task/golang/internal/k8shealth"
 )
+
+// buildVersion is stamped at build time via -ldflags "-X main.buildVersion=...".
+var buildVersion = "dev"
 
 func main() {
 	kubeconfig := flag.String("kubeconfig", "", "path to kubeconfig, leave empty for in-cluster")
 	listenAddr := flag.String("address", ":8080", "HTTP server listen address")
+	authEnabled := flag.Bool("auth-enabled", true,
+		"require Kubernetes TokenReview/SubjectAccessReview authentication and authorization on the /api/v1 routes; "+
+			"disable only for local testing (also settable via the chart's auth.enabled value)")
+	k8sTimeout := flag.Duration("k8s-timeout", 5*time.Second, "timeout for calls made to the Kubernetes API server")
+	namespacesFlag := flag.String("namespaces", "",
+		"comma-separated namespaces to operate within for deployment health and isolation list/delete; "+
+			"leave empty for cluster-wide (requires cluster-scoped RBAC - see the chart's rbac.clusterScoped/"+
+			"rbac.namespaces values, which set this flag automatically)")
 
 	flag.Parse()
+
+	namespaces := parseNamespaces(*namespacesFlag)
+
+	fmt.Printf("tyk-sre-assignment %s starting\n", buildVersion)
+
+	if !*authEnabled {
+		fmt.Println("WARNING: caller authentication/authorization is DISABLED (--auth-enabled=false); do not use this outside local testing")
+	}
 
 	kConfig, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
 		panic(err)
 	}
+	kConfig.Timeout = *k8sTimeout
 
 	clientset, err := kubernetes.NewForConfig(kConfig)
 	if err != nil {
 		panic(err)
 	}
 
-	version, err := getKubernetesVersion(clientset)
+	kubeVersion, err := k8shealth.GetKubernetesVersion(clientset)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Printf("Connected to Kubernetes %s\n", version)
+	fmt.Printf("Connected to Kubernetes %s\n", kubeVersion)
 
-	if err := startServer(*listenAddr); err != nil {
+	if len(namespaces) > 0 {
+		fmt.Printf("Operating in namespace-scoped mode: %s\n", strings.Join(namespaces, ", "))
+	}
+
+	server := &api.Server{Clientset: clientset, AuthEnabled: *authEnabled, Namespaces: namespaces}
+
+	fmt.Printf("Server listening on %s\n", *listenAddr)
+	if err := http.ListenAndServe(*listenAddr, server.Handler()); err != nil {
 		panic(err)
 	}
 }
 
-// getKubernetesVersion returns a string GitVersion of the Kubernetes server defined by the clientset.
-//
-// If it can't connect an error will be returned, which makes it useful to check connectivity.
-func getKubernetesVersion(clientset kubernetes.Interface) (string, error) {
-	version, err := clientset.Discovery().ServerVersion()
-	if err != nil {
-		return "", err
+// parseNamespaces splits a comma-separated --namespaces flag, trimming
+// whitespace and dropping empty entries so "" (the default) and "," both
+// mean "no namespaces configured" rather than [""].
+func parseNamespaces(flagValue string) []string {
+	var namespaces []string
+	for _, ns := range strings.Split(flagValue, ",") {
+		ns = strings.TrimSpace(ns)
+		if ns != "" {
+			namespaces = append(namespaces, ns)
+		}
 	}
-
-	return version.String(), nil
-}
-
-// startServer launches an HTTP server with defined handlers and blocks until it's terminated or fails with an error.
-//
-// Expects a listenAddr to bind to.
-func startServer(listenAddr string) error {
-	http.HandleFunc("/healthz", healthHandler)
-
-	fmt.Printf("Server listening on %s\n", listenAddr)
-
-	return http.ListenAndServe(listenAddr, nil)
-}
-
-// healthHandler responds with the health status of the application.
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-
-	_, err := w.Write([]byte("ok"))
-	if err != nil {
-		fmt.Println("failed writing to response")
-	}
+	return namespaces
 }
