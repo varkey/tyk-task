@@ -27,6 +27,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: golang/go.mod
+          cache-dependency-path: golang/go.sum
 
       - run: go build ./...
       - run: go vet ./...
@@ -41,6 +42,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: golang/go.mod
+          cache-dependency-path: golang/go.sum
 
       - uses: golangci/golangci-lint-action@v9
         with:
