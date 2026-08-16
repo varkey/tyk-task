@@ -269,8 +269,37 @@ func validate(req IsolationRequest) error {
 	if len(req.A.MatchLabels) == 0 || len(req.B.MatchLabels) == 0 {
 		return &apierr.ValidationError{Msg: "both workloads must specify at least one label in matchLabels"}
 	}
+	if err := validateLabels(req.A.MatchLabels); err != nil {
+		return err
+	}
+	if err := validateLabels(req.B.MatchLabels); err != nil {
+		return err
+	}
 	if canonical(req.A) == canonical(req.B) {
 		return &apierr.ValidationError{Msg: "the two workloads must be different - a workload can't be isolated from itself"}
+	}
+	return nil
+}
+
+// validateLabels rejects empty keys or values in a matchLabels map.
+//
+// An empty value is the dangerous one: buildAllowExceptPeers negates it into
+// "key NotIn [\"\"]", which - since NotIn is satisfied by a missing key too -
+// matches virtually every real pod (nothing actually sets a label to a
+// literal empty string). The isolation would still return 200 and create
+// real-looking NetworkPolicy objects, just ones that exclude nothing and
+// isolate nothing - a silent no-op that looks like a working cutoff. An
+// empty key would fail regardless once it reached the apiserver, but only as
+// an opaque 502 from an invalid label selector; rejecting it here up front
+// gives a clean 400 instead.
+func validateLabels(labels map[string]string) error {
+	for k, v := range labels {
+		if k == "" {
+			return &apierr.ValidationError{Msg: "matchLabels keys must not be empty"}
+		}
+		if v == "" {
+			return &apierr.ValidationError{Msg: fmt.Sprintf("matchLabels[%q] must not be empty", k)}
+		}
 	}
 	return nil
 }

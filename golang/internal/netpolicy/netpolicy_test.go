@@ -121,6 +121,10 @@ func TestApply(t *testing.T) {
 		cases := []IsolationRequest{
 			{A: WorkloadSelector{MatchLabels: map[string]string{"app": "a"}}, B: WorkloadSelector{Namespaces: []string{"ns-b"}, MatchLabels: map[string]string{"app": "b"}}},
 			{A: WorkloadSelector{Namespaces: []string{"ns-a"}}, B: WorkloadSelector{Namespaces: []string{"ns-b"}, MatchLabels: map[string]string{"app": "b"}}},
+			// A namespace list containing only empty strings collapses to
+			// none via normalize() before validate() ever runs - this pins
+			// that interaction down rather than trusting it by inspection.
+			{A: WorkloadSelector{Namespaces: []string{""}, MatchLabels: map[string]string{"app": "a"}}, B: WorkloadSelector{Namespaces: []string{"ns-b"}, MatchLabels: map[string]string{"app": "b"}}},
 		}
 		for _, req := range cases {
 			_, err := Apply(context.Background(), clientset, req)
@@ -128,6 +132,36 @@ func TestApply(t *testing.T) {
 			var verr *apierr.ValidationError
 			assert.ErrorAs(t, err, &verr)
 		}
+	})
+
+	t.Run("rejects an empty matchLabels value", func(t *testing.T) {
+		// An empty value negates into "key NotIn [\"\"]", which - since
+		// NotIn is satisfied by a missing key too - matches virtually every
+		// real pod and silently defeats the isolation instead of erroring.
+		clientset := fake.NewSimpleClientset()
+		req := IsolationRequest{
+			A: WorkloadSelector{Namespaces: []string{"ns-a"}, MatchLabels: map[string]string{"app": ""}},
+			B: WorkloadSelector{Namespaces: []string{"ns-b"}, MatchLabels: map[string]string{"app": "backend"}},
+		}
+
+		_, err := Apply(context.Background(), clientset, req)
+		require.Error(t, err)
+		var verr *apierr.ValidationError
+		require.ErrorAs(t, err, &verr)
+		assert.Contains(t, err.Error(), `matchLabels["app"]`)
+	})
+
+	t.Run("rejects an empty matchLabels key", func(t *testing.T) {
+		clientset := fake.NewSimpleClientset()
+		req := IsolationRequest{
+			A: WorkloadSelector{Namespaces: []string{"ns-a"}, MatchLabels: map[string]string{"": "frontend"}},
+			B: WorkloadSelector{Namespaces: []string{"ns-b"}, MatchLabels: map[string]string{"app": "backend"}},
+		}
+
+		_, err := Apply(context.Background(), clientset, req)
+		require.Error(t, err)
+		var verr *apierr.ValidationError
+		assert.ErrorAs(t, err, &verr)
 	})
 
 	t.Run("a namespace that doesn't exist is a clean ValidationError, not a raw API error", func(t *testing.T) {
