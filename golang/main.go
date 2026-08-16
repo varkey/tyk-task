@@ -50,12 +50,16 @@ func main() {
 		panic(err)
 	}
 
+	// Unlike the two panics above, a failed connectivity check here
+	// shouldn't be fatal - /readyz (story 3) already reports this live on
+	// an ongoing basis, so let the server start and stay not-ready instead
+	// of crash-looping the pod.
 	kubeVersion, err := k8shealth.GetKubernetesVersion(clientset)
 	if err != nil {
-		panic(err)
+		fmt.Printf("WARNING: could not reach the Kubernetes API server at startup: %v\n", err)
+	} else {
+		fmt.Printf("Connected to Kubernetes %s\n", kubeVersion)
 	}
-
-	fmt.Printf("Connected to Kubernetes %s\n", kubeVersion)
 
 	if len(namespaces) > 0 {
 		fmt.Printf("Operating in namespace-scoped mode: %s\n", strings.Join(namespaces, ", "))

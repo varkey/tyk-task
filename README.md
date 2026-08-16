@@ -97,3 +97,16 @@ of trying one cluster-wide call.
 **No UI.** The user stories do not ask specifically ask for a UI or a
 dashboard, so I didn't build one. The JSON API with curl would satisfy the
 requirements as stated.
+
+## Known limitations
+
+**Isolation doesn't cut off a connection already open and in active use.**
+Like Kubernetes NetworkPolicy enforcement generally, Calico only checks
+policy against the first packet of a flow - conntrack lets an established
+connection keep flowing after a policy change that would now deny it, until
+that connection closes or goes idle (see Calico's [connection tracking
+docs](https://docs.tigera.io/calico/latest/reference/host-endpoints/conntrack)
+and [projectcalico/calico#6399](https://github.com/projectcalico/calico/issues/6399),
+an open ask for a way to force-close matching connections on policy change).
+New connections are blocked the instant `POST /api/v1/isolation` is called;
+an already-open one keeps working until it ends on its own.

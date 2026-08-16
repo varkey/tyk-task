@@ -108,6 +108,31 @@ func TestHandleReadyz(t *testing.T) {
 		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 		assert.Equal(t, false, body["ready"])
 	})
+
+	t.Run("apiUnreachable flag tracks the outage across calls, for the once-per-edge log lines", func(t *testing.T) {
+		clientset := fake.NewSimpleClientset()
+		failing := true
+		clientset.Discovery().(*disco.FakeDiscovery).PrependReactor("get", "version",
+			func(action k8stesting.Action) (bool, runtime.Object, error) {
+				if failing {
+					return true, nil, errors.New("dial tcp: connection refused")
+				}
+				return false, nil, nil
+			})
+		s := &Server{Clientset: clientset}
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.True(t, s.apiUnreachable.Load())
+
+		failing = false
+		rec = httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.False(t, s.apiUnreachable.Load())
+	})
 }
 
 func TestHandleDeploymentsHealth(t *testing.T) {

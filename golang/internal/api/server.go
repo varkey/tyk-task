@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -42,6 +44,11 @@ type Server struct {
 	// this is required for namespace-scoped RBAC mode to work at all, not
 	// just an optimization.
 	Namespaces []string
+
+	// apiUnreachable tracks whether the last /readyz check failed, purely
+	// so handleReadyz can log an outage's start and end instead of a line
+	// per probe - see handleReadyz.
+	apiUnreachable atomic.Bool
 }
 
 // Handler builds the complete request router.
@@ -100,11 +107,22 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	kubeVersion, err := k8shealth.GetKubernetesVersion(s.Clientset)
 	if err != nil {
+		// Log the start of an outage once, not once per probe -
+		// CompareAndSwap only fires for the caller that observes the edge,
+		// so concurrent probes can't double-log it.
+		if s.apiUnreachable.CompareAndSwap(false, true) {
+			log.Printf("readyz: k8s API server unreachable: %v", err)
+		}
+
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"ready": false,
 			"error": err.Error(),
 		})
 		return
+	}
+
+	if s.apiUnreachable.CompareAndSwap(true, false) {
+		log.Println("readyz: k8s API server reachable again")
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

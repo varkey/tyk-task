@@ -3,18 +3,6 @@ have a port-forward open on `localhost:18080`.
 
 # Demo
 
-## Story 3 - connectivity
-
-```sh
-curl localhost:18080/readyz
-# {"kubernetesVersion":"v1.36.1","ready":true}
-```
-
-Kill the tool's route to the API server (e.g. scale it down while blocking
-egress, or just watch `kubectl get pods` - Ready flips to `False` the moment
-`/readyz` starts failing, since it's wired as the readiness probe) to see
-the other side of this.
-
 ## Story 1 - deployment health
 
 `demo-workloads` includes a `broken` Deployment (bad image, asks for 3
@@ -55,6 +43,107 @@ kubectl --context kind-tyk-sre-assignment -n ns-a exec "$FRONTEND" -- wget -qT5 
 
 `GET /api/v1/isolation` lists every isolation currently applied (reconstructed
 from the NetworkPolicy objects themselves - there's no separate database).
+
+## Story 3 - API server connectivity
+
+```sh
+curl localhost:18080/readyz
+# {"kubernetesVersion":"v1.36.1","ready":true}
+```
+
+To see this live instead of just reading the code, cut the tool's own
+egress to the API server with a plain NetworkPolicy - the same primitive
+story 2 manages, just applied directly rather than through the isolation
+API, since the API server isn't a workload story 2's namespace/label
+selectors can target:
+
+```sh
+kubectl --context kind-tyk-sre-assignment -n default apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cut-api-access
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tyk-sre-assignment
+      app.kubernetes.io/instance: tyk-sre-assignment
+  policyTypes:
+    - Egress
+  egress:
+    - ports: # DNS only - everything else, including the API server, is denied
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+EOF
+```
+
+Applying it alone shows nothing yet - the same limitation as story 2's
+isolation (see the README's [Known limitations](README.md#known-limitations)):
+the pod's existing connection to the API server survives a policy change
+that would now deny it.
+
+```sh
+curl localhost:18080/readyz
+# still {"kubernetesVersion":"v1.36.1","ready":true} - the existing connection is unaffected
+```
+
+Prove the policy is actually enforced, without touching the pod at all, by
+making a genuinely new connection from inside it: `kubectl debug` attaches a
+throwaway container sharing the pod's network namespace, so this doesn't
+require curl (or a shell) in the shipped image. `kubernetes.default.svc` is
+the API server's own in-cluster DNS name - it resolves to whatever ClusterIP
+the cluster actually assigned, unlike a hardcoded IP:
+
+```sh
+POD=$(kubectl --context kind-tyk-sre-assignment -n default get pod -l app.kubernetes.io/name=tyk-sre-assignment -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-tyk-sre-assignment -n default debug "$POD" --image=curlimages/curl --target=tyk-sre-assignment -- curl -sk --max-time 5 https://kubernetes.default.svc/version
+# times out - a fresh connection is blocked immediately, unlike the app's own long-lived one
+```
+
+To see `/readyz` itself flip - gracefully, not by crashing - force the app
+to make a fresh connection by restarting the pod:
+
+```sh
+kubectl --context kind-tyk-sre-assignment -n default delete pod -l app.kubernetes.io/name=tyk-sre-assignment
+
+# Comes up - and stays up, at 0/1 - instead of crash-looping:
+kubectl --context kind-tyk-sre-assignment -n default get pods -l app.kubernetes.io/name=tyk-sre-assignment
+# 0/1  Running
+
+curl localhost:18080/readyz
+# {"ready":false,"error":"...context deadline exceeded..."}
+```
+
+`kubectl logs` marks the start of the outage with one line - not one per
+failed probe, and not silence either:
+
+```
+2026/08/16 12:09:02 readyz: k8s API server unreachable: Get "https://10.96.0.1:443/version?timeout=5s": context deadline exceeded
+```
+
+Restore it - no further restart needed, the very next `/readyz` call
+succeeds as soon as the policy's gone:
+
+```sh
+kubectl --context kind-tyk-sre-assignment -n default delete networkpolicy cut-api-access
+
+curl localhost:18080/readyz
+# {"kubernetesVersion":"v1.36.1","ready":true}
+
+kubectl --context kind-tyk-sre-assignment -n default get pods -l app.kubernetes.io/name=tyk-sre-assignment
+# 1/1  Running, once the readiness probe catches up (a few seconds)
+```
+
+...with a matching bookend in the logs, again exactly once:
+
+```
+2026/08/16 12:10:50 readyz: k8s API server reachable again
+```
+
+(Re-open the port-forward from the top of this doc if the pod restart
+dropped it.)
 
 **Stories 4 & 5** aren't things you curl - see the README's CI/CD section and
 [deploy.md](deploy.md).
