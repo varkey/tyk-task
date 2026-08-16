@@ -1,0 +1,9 @@
+apiVersion: v2
+name: tyk-sre-assignment
+description: SRE tooling for cluster deployment health, connectivity checks, and on-demand network isolation
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/varkey/tyk-task
+sources:
+  - https://github.com/varkey/tyk-task

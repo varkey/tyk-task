@@ -1,0 +1,11 @@
+# kind's default CNI (kindnet) does not enforce NetworkPolicy - story 2's
+# isolation would appear to "work" (the objects get created) without this,
+# but traffic would never actually be blocked. This disables it so Calico
+# can be installed instead. See README.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+  podSubnet: "10.244.0.0/16"
+nodes:
+  - role: control-plane

@@ -1,0 +1,98 @@
+replicaCount: 1
+
+image:
+  # CI publishes to ghcr.io/<owner>/<repo> (lowercased) on every push to
+  # main - matches this repo's actual location, not the upstream assignment
+  # repo it was cloned from.
+  repository: ghcr.io/varkey/tyk-task
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+  # clusterScoped: true grants a ClusterRole/ClusterRoleBinding covering the
+  # whole cluster - required for story 1 ("all the deployments in the k8s
+  # cluster") and lets story 2's isolation target any two namespaces.
+  #
+  # Set to false to scope down to Role/RoleBinding in just `namespaces`
+  # instead. Tradeoff: deployment health reporting and network isolation are
+  # then both limited to that namespace list - see README.
+  clusterScoped: true
+  namespaces: []
+
+auth:
+  # Gates the API with Kubernetes TokenReview (authenticate the caller) and
+  # SubjectAccessReview (authorize the caller's own RBAC for the action).
+  # Threaded through to the container as --auth-enabled=<bool>.
+  #
+  # Disable only for local testing/demos against a cluster where minting
+  # caller tokens is inconvenient - never in a real deployment.
+  enabled: true
+
+# Only needed for out-of-cluster testing (e.g. running the chart's image
+# against a cluster via a mounted kubeconfig). Leave empty in normal use -
+# the in-cluster config derived from serviceAccount is used instead.
+kubeconfig: ""
+
+# HTTP paths and timing probed by the Deployment. /readyz performs a live
+# check against the Kubernetes API server (story 3), so pod Ready status in
+# `kubectl get pods` directly reflects whether this tool can currently reach
+# the cluster it's meant to be watching. /healthz is a pure liveness check -
+# it never calls the API server, only reports the process itself is up.
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+    # timeoutSeconds: 1        # kubelet's own default; raise if the process can be slow to respond under load
+    # successThreshold: 1      # must be 1 for liveness probes - Kubernetes rejects any other value here
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+    # timeoutSeconds: 3        # /readyz calls the k8s API server live (bounded by --k8s-timeout) - raise this if that call is typically slow
+    # successThreshold: 1      # consecutive successes needed to flip back to Ready after a failure
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  # distroless/static's "nonroot" user is UID/GID 65532, but it's a symbolic
+  # name in the image - kubelet can't verify runAsNonRoot from that alone and
+  # errors with CreateContainerConfigError unless the numeric UID/GID are
+  # given explicitly here.
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

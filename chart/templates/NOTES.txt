@@ -1,0 +1,17 @@
+tyk-sre-assignment has been deployed.
+
+Check pod readiness (reflects live Kubernetes API connectivity once /readyz
+is wired up as the readiness probe):
+
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Port-forward to reach the API locally:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "tyk-sre-assignment.fullname" . }} 8080:{{ .Values.service.port }}
+  curl localhost:8080/healthz
+
+{{- if not .Values.auth.enabled }}
+
+WARNING: auth.enabled=false - the API is unauthenticated. Do not use this
+outside local testing.
+{{- end }}
