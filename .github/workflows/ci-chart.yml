@@ -1,0 +1,35 @@
+name: CI - Chart
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'chart/**'
+      - '.github/workflows/ci-chart.yml'
+  pull_request:
+    paths:
+      - 'chart/**'
+      - '.github/workflows/ci-chart.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    name: Helm lint & template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+
+      - run: helm lint chart
+
+      - name: Render with default values
+        run: helm template test chart
+
+      - name: Render with namespaced RBAC
+        run: helm template test chart --set rbac.clusterScoped=false --set rbac.namespaces='{ns-a,ns-b}'
+
+      - name: Render with auth disabled
+        run: helm template test chart --set auth.enabled=false
