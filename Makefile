@@ -1,4 +1,6 @@
-IMAGE_REPO    ?= tyk-sre-assignment
+# Matches chart/values.yaml's image.repository - CI publishes here
+# (ghcr.io/<owner>/<repo>, lowercased) on pushes to main.
+IMAGE_REPO    ?= ghcr.io/varkey/tyk-task
 IMAGE_TAG     ?= dev
 IMAGE         := $(IMAGE_REPO):$(IMAGE_TAG)
 KIND_CLUSTER  ?= tyk-sre-assignment
