@@ -9,7 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
+	"sync/atomic"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -41,6 +44,11 @@ type Server struct {
 	// this is required for namespace-scoped RBAC mode to work at all, not
 	// just an optimization.
 	Namespaces []string
+
+	// apiUnreachable tracks whether the last /readyz check failed, purely
+	// so handleReadyz can log an outage's start and end instead of a line
+	// per probe - see handleReadyz.
+	apiUnreachable atomic.Bool
 }
 
 // Handler builds the complete request router.
@@ -99,11 +107,22 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	kubeVersion, err := k8shealth.GetKubernetesVersion(s.Clientset)
 	if err != nil {
+		// Log the start of an outage once, not once per probe -
+		// CompareAndSwap only fires for the caller that observes the edge,
+		// so concurrent probes can't double-log it.
+		if s.apiUnreachable.CompareAndSwap(false, true) {
+			log.Printf("readyz: k8s API server unreachable: %v", err)
+		}
+
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"ready": false,
 			"error": err.Error(),
 		})
 		return
+	}
+
+	if s.apiUnreachable.CompareAndSwap(true, false) {
+		log.Println("readyz: k8s API server reachable again")
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -114,6 +133,13 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 // handleDeploymentsHealth answers story 1. An explicit ?namespace= always
 // wins; otherwise it follows s.Namespaces - see that field's doc comment.
+//
+// ?onlyUnhealthy=true trims the returned Deployments list down to the
+// unhealthy ones - useful for scripts/alerting that just want the trouble
+// list without doing their own jq filtering. The summary counts
+// (totalDeployments/healthyCount/unhealthyCount) always reflect the full
+// set regardless, so "3 of 40 unhealthy" stays visible even when the list
+// itself is trimmed to 3 entries.
 func (s *Server) handleDeploymentsHealth(w http.ResponseWriter, r *http.Request) {
 	var report k8shealth.DeploymentHealthReport
 	var err error
@@ -129,6 +155,16 @@ func (s *Server) handleDeploymentsHealth(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeAPIError(w, err)
 		return
+	}
+
+	if onlyUnhealthy, _ := strconv.ParseBool(r.URL.Query().Get("onlyUnhealthy")); onlyUnhealthy {
+		filtered := make([]k8shealth.DeploymentStatus, 0, report.UnhealthyCount)
+		for _, d := range report.Deployments {
+			if !d.Healthy {
+				filtered = append(filtered, d)
+			}
+		}
+		report.Deployments = filtered
 	}
 
 	writeJSON(w, http.StatusOK, report)

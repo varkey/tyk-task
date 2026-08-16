@@ -1,4 +1,6 @@
-IMAGE_REPO    ?= tyk-sre-assignment
+# Matches chart/values.yaml's image.repository - CI publishes here
+# (ghcr.io/<owner>/<repo>, lowercased) on pushes to main.
+IMAGE_REPO    ?= ghcr.io/varkey/tyk-task
 IMAGE_TAG     ?= dev
 IMAGE         := $(IMAGE_REPO):$(IMAGE_TAG)
 KIND_CLUSTER  ?= tyk-sre-assignment
@@ -10,7 +12,7 @@ CALICO_VERSION ?= v3.29.1
 
 .PHONY: build test vet lint docker-build \
         kind-create kind-delete kind-load calico-install \
-        helm-lint helm-template helm-install helm-uninstall \
+        helm-lint helm-template helm-install helm-install-no-auth helm-uninstall \
         demo-workloads demo-clean
 
 build:
@@ -45,11 +47,14 @@ kind-load: docker-build
 # CRDs are applied directly first: `helm install` in one shot occasionally
 # tries to create the Installation custom resource before the API server has
 # finished registering the CRD it depends on, which then fails once and
-# succeeds on retry - installing the CRDs up front avoids that race.
+# succeeds on retry. Waiting for condition=Established closes that race
+# properly instead of just relying on the delay between these two commands.
 calico-install:
 	helm repo add projectcalico https://docs.tigera.io/calico/charts >/dev/null 2>&1 || true
 	helm repo update projectcalico
-	helm show crds projectcalico/tigera-operator --version $(CALICO_VERSION) | kubectl --context $(KIND_CONTEXT) apply -f -
+	helm show crds projectcalico/tigera-operator --version $(CALICO_VERSION) \
+		| kubectl --context $(KIND_CONTEXT) apply -f - -o name \
+		| xargs kubectl --context $(KIND_CONTEXT) wait --for=condition=Established --timeout=60s
 	helm upgrade --install calico projectcalico/tigera-operator \
 		--kube-context $(KIND_CONTEXT) --namespace tigera-operator --create-namespace \
 		--version $(CALICO_VERSION)
@@ -62,13 +67,26 @@ helm-lint:
 helm-template:
 	helm template $(RELEASE) $(CHART)
 
+HELM_IMAGE_SET := --set image.repository=$(IMAGE_REPO) \
+	--set image.tag=$(IMAGE_TAG) \
+	--set image.pullPolicy=IfNotPresent
+
 helm-install: kind-load
 	helm upgrade --install $(RELEASE) $(CHART) \
 		--namespace $(NAMESPACE) --create-namespace \
 		--kube-context $(KIND_CONTEXT) \
-		--set image.repository=$(IMAGE_REPO) \
-		--set image.tag=$(IMAGE_TAG) \
-		--set image.pullPolicy=IfNotPresent
+		$(HELM_IMAGE_SET)
+
+# Same as helm-install but with the API's auth gate (TokenReview/
+# SubjectAccessReview) disabled - see chart/values.yaml's auth.enabled
+# comment. Local testing/demos against a cluster where minting caller
+# tokens is inconvenient only, never a real deployment.
+helm-install-no-auth: kind-load
+	helm upgrade --install $(RELEASE) $(CHART) \
+		--namespace $(NAMESPACE) --create-namespace \
+		--kube-context $(KIND_CONTEXT) \
+		$(HELM_IMAGE_SET) \
+		--set auth.enabled=false
 
 helm-uninstall:
 	helm uninstall $(RELEASE) --namespace $(NAMESPACE) --kube-context $(KIND_CONTEXT)

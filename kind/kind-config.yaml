@@ -9,3 +9,5 @@ networking:
   podSubnet: "10.244.0.0/16"
 nodes:
   - role: control-plane
+  - role: worker
+  - role: worker

@@ -108,6 +108,31 @@ func TestHandleReadyz(t *testing.T) {
 		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 		assert.Equal(t, false, body["ready"])
 	})
+
+	t.Run("apiUnreachable flag tracks the outage across calls, for the once-per-edge log lines", func(t *testing.T) {
+		clientset := fake.NewSimpleClientset()
+		failing := true
+		clientset.Discovery().(*disco.FakeDiscovery).PrependReactor("get", "version",
+			func(action k8stesting.Action) (bool, runtime.Object, error) {
+				if failing {
+					return true, nil, errors.New("dial tcp: connection refused")
+				}
+				return false, nil, nil
+			})
+		s := &Server{Clientset: clientset}
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.True(t, s.apiUnreachable.Load())
+
+		failing = false
+		rec = httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.False(t, s.apiUnreachable.Load())
+	})
 }
 
 func TestHandleDeploymentsHealth(t *testing.T) {
@@ -124,8 +149,11 @@ func TestHandleDeploymentsHealth(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var report struct {
-		AllHealthy  bool `json:"allHealthy"`
-		Deployments []struct {
+		AllHealthy       bool `json:"allHealthy"`
+		TotalDeployments int  `json:"totalDeployments"`
+		HealthyCount     int  `json:"healthyCount"`
+		UnhealthyCount   int  `json:"unhealthyCount"`
+		Deployments      []struct {
 			Name    string `json:"name"`
 			Healthy bool   `json:"healthy"`
 		} `json:"deployments"`
@@ -133,6 +161,48 @@ func TestHandleDeploymentsHealth(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&report))
 	assert.False(t, report.AllHealthy)
 	assert.Len(t, report.Deployments, 2)
+	assert.Equal(t, 2, report.TotalDeployments)
+	assert.Equal(t, 1, report.HealthyCount)
+	assert.Equal(t, 1, report.UnhealthyCount)
+	// Unhealthy sorts first, so the degraded entry is scannable without
+	// any client-side filtering.
+	assert.Equal(t, "degraded", report.Deployments[0].Name)
+	assert.False(t, report.Deployments[0].Healthy)
+}
+
+func TestHandleDeploymentsHealth_OnlyUnhealthy(t *testing.T) {
+	clientset := fake.NewSimpleClientset(
+		deployment("ns-a", "healthy", int32Ptr(2), 2),
+		deployment("ns-a", "degraded", int32Ptr(2), 1),
+	)
+	s := &Server{Clientset: clientset}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/deployments/health?onlyUnhealthy=true", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var report struct {
+		AllHealthy       bool `json:"allHealthy"`
+		TotalDeployments int  `json:"totalDeployments"`
+		HealthyCount     int  `json:"healthyCount"`
+		UnhealthyCount   int  `json:"unhealthyCount"`
+		Deployments      []struct {
+			Name string `json:"name"`
+		} `json:"deployments"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&report))
+
+	// The list is trimmed to just the unhealthy entry...
+	require.Len(t, report.Deployments, 1)
+	assert.Equal(t, "degraded", report.Deployments[0].Name)
+	// ...but the summary counts still reflect the full set, not the
+	// filtered list.
+	assert.Equal(t, 2, report.TotalDeployments)
+	assert.Equal(t, 1, report.HealthyCount)
+	assert.Equal(t, 1, report.UnhealthyCount)
+	assert.False(t, report.AllHealthy)
 }
 
 func TestHandleDeploymentsHealth_NamespaceScoped(t *testing.T) {

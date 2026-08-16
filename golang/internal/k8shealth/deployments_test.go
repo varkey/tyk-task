@@ -41,6 +41,9 @@ func TestCheckDeploymentHealth(t *testing.T) {
 
 		assert.True(t, report.AllHealthy)
 		assert.Len(t, report.Deployments, 2)
+		assert.Equal(t, 2, report.TotalDeployments)
+		assert.Equal(t, 2, report.HealthyCount)
+		assert.Equal(t, 0, report.UnhealthyCount)
 		for _, d := range report.Deployments {
 			assert.True(t, d.Healthy)
 		}
@@ -56,6 +59,9 @@ func TestCheckDeploymentHealth(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, report.AllHealthy)
+		assert.Equal(t, 2, report.TotalDeployments)
+		assert.Equal(t, 1, report.HealthyCount)
+		assert.Equal(t, 1, report.UnhealthyCount)
 
 		byName := map[string]DeploymentStatus{}
 		for _, d := range report.Deployments {
@@ -65,6 +71,27 @@ func TestCheckDeploymentHealth(t *testing.T) {
 		assert.False(t, byName["degraded"].Healthy)
 		assert.Equal(t, int32(3), byName["degraded"].Desired)
 		assert.Equal(t, int32(1), byName["degraded"].Ready)
+	})
+
+	t.Run("unhealthy deployments sort before healthy ones", func(t *testing.T) {
+		clientset := fake.NewSimpleClientset(
+			deployment("ns-a", "zz-healthy", int32Ptr(1), 1),
+			deployment("ns-a", "aa-healthy", int32Ptr(1), 1),
+			deployment("ns-a", "zz-broken", int32Ptr(1), 0),
+			deployment("ns-a", "aa-broken", int32Ptr(1), 0),
+		)
+
+		report, err := CheckDeploymentHealth(context.Background(), clientset, "")
+		require.NoError(t, err)
+
+		require.Len(t, report.Deployments, 4)
+		names := make([]string, len(report.Deployments))
+		for i, d := range report.Deployments {
+			names[i] = d.Name
+		}
+		// Unhealthy first (alphabetical within the group), then healthy
+		// (alphabetical within that group) - matches finalizeReport's sort.
+		assert.Equal(t, []string{"aa-broken", "zz-broken", "aa-healthy", "zz-healthy"}, names)
 	})
 
 	t.Run("nil spec.Replicas defaults to 1", func(t *testing.T) {
@@ -141,8 +168,15 @@ func TestCheckDeploymentHealthAcrossNamespaces(t *testing.T) {
 
 		assert.False(t, report.AllHealthy)
 		require.Len(t, report.Deployments, 2)
+		assert.Equal(t, 2, report.TotalDeployments)
+		assert.Equal(t, 1, report.HealthyCount)
+		assert.Equal(t, 1, report.UnhealthyCount)
 		names := []string{report.Deployments[0].Name, report.Deployments[1].Name}
 		assert.ElementsMatch(t, []string{"healthy", "degraded"}, names)
+		// Merging across namespaces re-sorts the combined set, so the
+		// degraded deployment still lands first even though it came from
+		// the second List call.
+		assert.Equal(t, "degraded", report.Deployments[0].Name)
 	})
 
 	t.Run("empty namespace list is trivially healthy with an empty (not nil) array", func(t *testing.T) {
