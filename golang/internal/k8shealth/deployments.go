@@ -3,6 +3,7 @@ package k8shealth
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,9 +23,52 @@ type DeploymentStatus struct {
 
 // DeploymentHealthReport summarizes the replica health of every Deployment
 // considered by CheckDeploymentHealth.
+//
+// TotalDeployments/HealthyCount/UnhealthyCount are always over the full set
+// considered, even if a caller asks the HTTP handler to filter Deployments
+// down to only the unhealthy ones - so "3 of 40 unhealthy" stays visible
+// however the list itself is trimmed. Deployments is sorted unhealthy-first
+// (see finalizeReport) so the entries worth looking at surface without any
+// client-side filtering at all.
 type DeploymentHealthReport struct {
-	AllHealthy  bool               `json:"allHealthy"`
-	Deployments []DeploymentStatus `json:"deployments"`
+	AllHealthy       bool               `json:"allHealthy"`
+	TotalDeployments int                `json:"totalDeployments"`
+	HealthyCount     int                `json:"healthyCount"`
+	UnhealthyCount   int                `json:"unhealthyCount"`
+	Deployments      []DeploymentStatus `json:"deployments"`
+}
+
+// finalizeReport computes the summary counts and sorts deployments
+// unhealthy-first (ties broken by namespace, then name, for deterministic
+// output) so a plain `curl | jq` shows what's broken at the top without any
+// filtering. It's the single place both CheckDeploymentHealth and
+// CheckDeploymentHealthAcrossNamespaces build their report from, so the
+// counting/sorting logic can't drift between the two call paths.
+func finalizeReport(deployments []DeploymentStatus) DeploymentHealthReport {
+	sort.SliceStable(deployments, func(i, j int) bool {
+		if deployments[i].Healthy != deployments[j].Healthy {
+			return !deployments[i].Healthy // unhealthy (false) sorts first
+		}
+		if deployments[i].Namespace != deployments[j].Namespace {
+			return deployments[i].Namespace < deployments[j].Namespace
+		}
+		return deployments[i].Name < deployments[j].Name
+	})
+
+	report := DeploymentHealthReport{
+		AllHealthy:       true,
+		TotalDeployments: len(deployments),
+		Deployments:      deployments,
+	}
+	for _, d := range deployments {
+		if d.Healthy {
+			report.HealthyCount++
+		} else {
+			report.UnhealthyCount++
+			report.AllHealthy = false
+		}
+	}
+	return report
 }
 
 // CheckDeploymentHealth lists Deployments in namespace (pass "" to consider
@@ -51,32 +95,23 @@ func CheckDeploymentHealth(ctx context.Context, clientset kubernetes.Interface, 
 		return DeploymentHealthReport{}, fmt.Errorf("listing deployments: %w", err)
 	}
 
-	report := DeploymentHealthReport{
-		AllHealthy:  true,
-		Deployments: make([]DeploymentStatus, 0, len(list.Items)),
-	}
-
+	deployments := make([]DeploymentStatus, 0, len(list.Items))
 	for _, d := range list.Items {
 		desired := int32(1)
 		if d.Spec.Replicas != nil {
 			desired = *d.Spec.Replicas
 		}
 
-		healthy := d.Status.ReadyReplicas == desired
-		if !healthy {
-			report.AllHealthy = false
-		}
-
-		report.Deployments = append(report.Deployments, DeploymentStatus{
+		deployments = append(deployments, DeploymentStatus{
 			Name:      d.Name,
 			Namespace: d.Namespace,
 			Desired:   desired,
 			Ready:     d.Status.ReadyReplicas,
-			Healthy:   healthy,
+			Healthy:   d.Status.ReadyReplicas == desired,
 		})
 	}
 
-	return report, nil
+	return finalizeReport(deployments), nil
 }
 
 // CheckDeploymentHealthAcrossNamespaces merges CheckDeploymentHealth across
@@ -90,18 +125,15 @@ func CheckDeploymentHealth(ctx context.Context, clientset kubernetes.Interface, 
 // CheckDeploymentHealth's IsForbidden handling). Iterating per namespace is
 // the only way to get the equivalent result under that RBAC shape.
 func CheckDeploymentHealthAcrossNamespaces(ctx context.Context, clientset kubernetes.Interface, namespaces []string) (DeploymentHealthReport, error) {
-	merged := DeploymentHealthReport{AllHealthy: true, Deployments: []DeploymentStatus{}}
+	deployments := []DeploymentStatus{}
 
 	for _, ns := range namespaces {
 		r, err := CheckDeploymentHealth(ctx, clientset, ns)
 		if err != nil {
 			return DeploymentHealthReport{}, err
 		}
-		merged.Deployments = append(merged.Deployments, r.Deployments...)
-		if !r.AllHealthy {
-			merged.AllHealthy = false
-		}
+		deployments = append(deployments, r.Deployments...)
 	}
 
-	return merged, nil
+	return finalizeReport(deployments), nil
 }

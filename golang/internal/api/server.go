@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -114,6 +115,13 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 // handleDeploymentsHealth answers story 1. An explicit ?namespace= always
 // wins; otherwise it follows s.Namespaces - see that field's doc comment.
+//
+// ?onlyUnhealthy=true trims the returned Deployments list down to the
+// unhealthy ones - useful for scripts/alerting that just want the trouble
+// list without doing their own jq filtering. The summary counts
+// (totalDeployments/healthyCount/unhealthyCount) always reflect the full
+// set regardless, so "3 of 40 unhealthy" stays visible even when the list
+// itself is trimmed to 3 entries.
 func (s *Server) handleDeploymentsHealth(w http.ResponseWriter, r *http.Request) {
 	var report k8shealth.DeploymentHealthReport
 	var err error
@@ -129,6 +137,16 @@ func (s *Server) handleDeploymentsHealth(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeAPIError(w, err)
 		return
+	}
+
+	if onlyUnhealthy, _ := strconv.ParseBool(r.URL.Query().Get("onlyUnhealthy")); onlyUnhealthy {
+		filtered := make([]k8shealth.DeploymentStatus, 0, report.UnhealthyCount)
+		for _, d := range report.Deployments {
+			if !d.Healthy {
+				filtered = append(filtered, d)
+			}
+		}
+		report.Deployments = filtered
 	}
 
 	writeJSON(w, http.StatusOK, report)

@@ -33,7 +33,7 @@ All bodies are JSON.
 |---|---|---|---|
 | GET | `/healthz` | none | liveness only, never touches the API server |
 | GET | `/readyz` | none | live connectivity check; 503 when unreachable |
-| GET | `/api/v1/deployments/health?namespace=` | `list deployments` (cluster-wide, or in `namespace` if given) | |
+| GET | `/api/v1/deployments/health?namespace=&onlyUnhealthy=` | `list deployments` (cluster-wide, or in `namespace` if given) | `deployments` is sorted unhealthy-first; `onlyUnhealthy=true` trims it to just the unhealthy entries, `totalDeployments`/`healthyCount`/`unhealthyCount` always reflect the full set regardless |
 | GET | `/api/v1/isolation` | `list networkpolicies` | |
 | POST | `/api/v1/isolation` | `create networkpolicies` in every namespace named in the body | body: `{"a": {"namespaces": [...], "matchLabels": {...}}, "b": {...}}` |
 | DELETE | `/api/v1/isolation/{id}` | `delete networkpolicies` in every namespace the isolation touches | 404 if `id` doesn't exist |

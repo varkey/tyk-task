@@ -22,7 +22,11 @@ replicas, gets 0) alongside `frontend`/`backend`, which are healthy:
 
 ```sh
 curl -s localhost:18080/api/v1/deployments/health | jq
-# "allHealthy": false, and the "broken" entry shows desiredReplicas: 3, readyReplicas: 0, healthy: false
+# "allHealthy": false, "unhealthyCount": 1, and "broken" sorts first in
+# "deployments" with desiredReplicas: 3, readyReplicas: 0, healthy: false
+
+curl -s localhost:18080/api/v1/deployments/health?onlyUnhealthy=true | jq '.deployments'
+# just the "broken" entry - useful for scripts that want the trouble list without jq filtering
 ```
 
 ## Story 2 - network isolation
