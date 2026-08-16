@@ -1,14 +1,33 @@
 # Matches chart/values.yaml's image.repository - CI publishes here
-# (ghcr.io/<owner>/<repo>, lowercased) on pushes to main.
+# (ghcr.io/<owner>/<repo>, lowercased) on pushes to main, tagged with the
+# commit SHA and `latest`.
 IMAGE_REPO    ?= ghcr.io/varkey/tyk-task
-IMAGE_TAG     ?= dev
-IMAGE         := $(IMAGE_REPO):$(IMAGE_TAG)
 KIND_CLUSTER  ?= tyk-sre-assignment
 KIND_CONTEXT  := kind-$(KIND_CLUSTER)
 CHART         := chart
 RELEASE       ?= tyk-sre-assignment
 NAMESPACE     ?= default
 CALICO_VERSION ?= v3.29.1
+
+# LOCAL=1 (e.g. `make helm-install LOCAL=1`) builds the image from this
+# checkout and loads it into kind instead of deploying what CI already
+# published - for trying out changes that haven't been pushed to main yet.
+# Deploying otherwise never needs a local build: it just pulls
+# $(IMAGE_REPO):latest, which is why pullPolicy is Always there (IfNotPresent
+# would silently keep serving whatever was last pulled under that mutable
+# tag) - LOCAL's own image never leaves this machine, so IfNotPresent is
+# what makes kind use the freshly loaded copy instead of trying to pull it.
+LOCAL ?= 0
+ifeq ($(LOCAL),1)
+IMAGE_TAG   ?= dev
+PULL_POLICY := IfNotPresent
+HELM_DEPS   := kind-load
+else
+IMAGE_TAG   ?= latest
+PULL_POLICY := Always
+HELM_DEPS   :=
+endif
+IMAGE := $(IMAGE_REPO):$(IMAGE_TAG)
 
 .PHONY: build test vet lint docker-build \
         kind-create kind-delete kind-load calico-install \
@@ -67,11 +86,14 @@ helm-lint:
 helm-template:
 	helm template $(RELEASE) $(CHART)
 
-HELM_IMAGE_SET := --set image.repository=$(IMAGE_REPO) \
+# Deferred (=) rather than immediate (:=) so it picks up PULL_POLICY /
+# IMAGE_TAG / IMAGE_REPO as set by the LOCAL branch above, evaluated when a
+# recipe actually uses it rather than when this line is read.
+HELM_IMAGE_SET = --set image.repository=$(IMAGE_REPO) \
 	--set image.tag=$(IMAGE_TAG) \
-	--set image.pullPolicy=IfNotPresent
+	--set image.pullPolicy=$(PULL_POLICY)
 
-helm-install: kind-load
+helm-install: $(HELM_DEPS)
 	helm upgrade --install $(RELEASE) $(CHART) \
 		--namespace $(NAMESPACE) --create-namespace \
 		--kube-context $(KIND_CONTEXT) \
@@ -81,7 +103,7 @@ helm-install: kind-load
 # SubjectAccessReview) disabled - see chart/values.yaml's auth.enabled
 # comment. Local testing/demos against a cluster where minting caller
 # tokens is inconvenient only, never a real deployment.
-helm-install-no-auth: kind-load
+helm-install-no-auth: $(HELM_DEPS)
 	helm upgrade --install $(RELEASE) $(CHART) \
 		--namespace $(NAMESPACE) --create-namespace \
 		--kube-context $(KIND_CONTEXT) \

@@ -21,7 +21,7 @@ chart. No UI - see [Decisions & tradeoffs](#decisions--tradeoffs).
 
 ## Getting started
 
-- **[deploy.md](deploy.md)** - build and deploy against a local kind cluster
+- **[deploy.md](deploy.md)** - deploy against a local kind cluster
 - **[demo.md](demo.md)** - exercise all five stories, plus the auth layer,
   against that deployment
 

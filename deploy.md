@@ -2,7 +2,9 @@
 
 # Deploying
 
-Prerequisites: `go`, `docker`, `kind`, `helm`, `kubectl`.
+Prerequisites: `kind`, `helm`, `kubectl`. (`go` and `docker` are only needed
+for `LOCAL=1` below - building from source rather than deploying CI's
+published image.)
 
 ```sh
 # 1. Cluster with kind's default CNI disabled, then Calico installed instead.
@@ -13,9 +15,12 @@ Prerequisites: `go`, `docker`, `kind`, `helm`, `kubectl`.
 make kind-create
 make calico-install
 
-# 2. Build the image, load it into kind, deploy the chart - auth disabled,
-#    for the fastest path through demo.md (no bearer tokens to mint just to
-#    try the tool out).
+# 2. Deploy the chart - auth disabled, for the fastest path through demo.md
+#    (no bearer tokens to mint just to try the tool out). No build required:
+#    this pulls the image CI already published to ghcr.io/varkey/tyk-task,
+#    tagged `latest`. To try out local changes instead, add LOCAL=1 (e.g.
+#    `make helm-install-no-auth LOCAL=1`) to build from this checkout and
+#    load that image into kind instead.
 make helm-install-no-auth
 
 # 3. A couple of namespaces/workloads to demo stories 1 and 2 against.
