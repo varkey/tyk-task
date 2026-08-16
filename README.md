@@ -73,13 +73,18 @@ enforces NetworkPolicy. kind's default CNI (kindnet) doesn't, which is why
 [deploy.md](deploy.md) installs Calico first - without it, the isolation API
 would create the right objects but it wouldn't be enforced.
 
+**Symmetric isolation policies.** Creating an isolation writes a NetworkPolicy for both
+workloads in a pair, for thoroughness. A single policy - Ingress+Egress on
+either workload's own selector - already blocks traffic in both directions. 
+
 **Auth.** The user stories do not ask for auth, but an unauthenticated
 endpoint that can create or delete NetworkPolicies (or read every
 Deployment in the cluster) isn't defensible by any normal security bar, so
-the auth is necessary here. Instead of introducing a new token or secret to
-manage, it uses Kubernetes' own built-in access mechanisms: TokenReview to
-authenticate the caller, then SubjectAccessReview to check that caller's
-own RBAC for the specific action they're asking for. `--auth-enabled` /
+the auth is necessary here. It uses Kubernetes' own built-in access
+mechanisms - TokenReview to authenticate the caller, then
+SubjectAccessReview to check that caller's own RBAC for the specific action
+they're asking for - so there's no separate token or secret to manage.
+`--auth-enabled` /
 `auth.enabled` is only used to disable auth for testing - it's on by
 default.
 
