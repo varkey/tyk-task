@@ -27,6 +27,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: golang/go.mod
+          cache-dependency-path: golang/go.sum
 
       - run: go build ./...
       - run: go vet ./...
@@ -41,6 +42,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: golang/go.mod
+          cache-dependency-path: golang/go.sum
 
       - uses: golangci/golangci-lint-action@v9
         with:
@@ -172,7 +174,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_REPO }}
           tags: |
-            type=sha,format=long
+            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Create manifest and push

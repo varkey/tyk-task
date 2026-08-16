@@ -1,5 +1,6 @@
-← [README](README.md) · assumes you've completed [deploy.md](deploy.md) and
-have a port-forward open on `localhost:18080`.
+← [README](README.md) · assumes you've completed [deploy.md](deploy.md)
+(deployed with `make helm-install-no-auth`, so none of the calls below need a
+bearer token) and have a port-forward open on `localhost:18080`.
 
 # Demo
 
@@ -51,11 +52,10 @@ curl localhost:18080/readyz
 # {"kubernetesVersion":"v1.36.1","ready":true}
 ```
 
-To see this live instead of just reading the code, cut the tool's own
-egress to the API server with a plain NetworkPolicy - the same primitive
-story 2 manages, just applied directly rather than through the isolation
-API, since the API server isn't a workload story 2's namespace/label
-selectors can target:
+To see this live, cut the tool's own egress to the API server with a plain
+NetworkPolicy - the same primitive story 2 manages, applied directly here
+since the API server isn't a workload story 2's namespace/label selectors
+can target:
 
 ```sh
 kubectl --context kind-tyk-sre-assignment -n default apply -f - <<'EOF'
@@ -102,13 +102,13 @@ kubectl --context kind-tyk-sre-assignment -n default debug "$POD" --image=curlim
 # times out - a fresh connection is blocked immediately, unlike the app's own long-lived one
 ```
 
-To see `/readyz` itself flip - gracefully, not by crashing - force the app
-to make a fresh connection by restarting the pod:
+To see `/readyz` itself flip, restart the pod so the app has to make a fresh
+connection:
 
 ```sh
 kubectl --context kind-tyk-sre-assignment -n default delete pod -l app.kubernetes.io/name=tyk-sre-assignment
 
-# Comes up - and stays up, at 0/1 - instead of crash-looping:
+# Comes up at 0/1 and stays there (no crash-loop):
 kubectl --context kind-tyk-sre-assignment -n default get pods -l app.kubernetes.io/name=tyk-sre-assignment
 # 0/1  Running
 
@@ -150,31 +150,36 @@ dropped it.)
 
 ## Auth
 
-With `auth.enabled=true` (the chart's default), every `/api/v1/*` call needs
-`Authorization: Bearer <token>`. The token is checked two ways: `TokenReview`
-resolves who it belongs to, `SubjectAccessReview` checks whether *that
-identity's own RBAC* permits the specific action being requested (see the
-README's Decisions & tradeoffs section for why).
+Everything above was run with auth disabled (`make helm-install-no-auth`) for
+a frictionless walkthrough. In a real deployment `auth.enabled=true` is the
+chart's default - every `/api/v1/*` call then needs `Authorization: Bearer
+<token>`. The token is checked two ways: `TokenReview` resolves who it
+belongs to, `SubjectAccessReview` checks whether *that identity's own RBAC*
+permits the specific action being requested (see the README's Decisions &
+tradeoffs section for why).
+
+Redeploy with auth on, then re-open the port-forward from the top of this doc:
 
 ```sh
-kubectl create serviceaccount sre-caller
-kubectl create serviceaccount no-access
+make helm-install
+```
+
+```sh
+kubectl --context kind-tyk-sre-assignment create serviceaccount sre-caller
+kubectl --context kind-tyk-sre-assignment create serviceaccount no-access
 
 # sre-caller can list deployments cluster-wide and manage networkpolicies in ns-a/ns-b.
-kubectl create clusterrole demo-deployments --verb=list --resource=deployments
-kubectl create clusterrolebinding demo-deployments --clusterrole=demo-deployments --serviceaccount=default:sre-caller
-kubectl create role demo-netpol -n ns-a --verb=create,delete --resource=networkpolicies
-kubectl create rolebinding demo-netpol -n ns-a --role=demo-netpol --serviceaccount=default:sre-caller
-kubectl create role demo-netpol -n ns-b --verb=create,delete --resource=networkpolicies
-kubectl create rolebinding demo-netpol -n ns-b --role=demo-netpol --serviceaccount=default:sre-caller
+kubectl --context kind-tyk-sre-assignment create clusterrole demo-deployments --verb=list --resource=deployments
+kubectl --context kind-tyk-sre-assignment create clusterrolebinding demo-deployments --clusterrole=demo-deployments --serviceaccount=default:sre-caller
+kubectl --context kind-tyk-sre-assignment create role demo-netpol -n ns-a --verb=create,delete --resource=networkpolicies
+kubectl --context kind-tyk-sre-assignment create rolebinding demo-netpol -n ns-a --role=demo-netpol --serviceaccount=default:sre-caller
+kubectl --context kind-tyk-sre-assignment create role demo-netpol -n ns-b --verb=create,delete --resource=networkpolicies
+kubectl --context kind-tyk-sre-assignment create rolebinding demo-netpol -n ns-b --role=demo-netpol --serviceaccount=default:sre-caller
 
-SRE_TOKEN=$(kubectl create token sre-caller)
-NOACCESS_TOKEN=$(kubectl create token no-access)
+SRE_TOKEN=$(kubectl --context kind-tyk-sre-assignment create token sre-caller)
+NOACCESS_TOKEN=$(kubectl --context kind-tyk-sre-assignment create token no-access)
 
 curl -o /dev/null -w '%{http_code}\n' localhost:18080/api/v1/deployments/health                            # 401 - no token
 curl -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $NOACCESS_TOKEN" localhost:18080/api/v1/deployments/health  # 403 - authenticated, no RBAC
 curl -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $SRE_TOKEN" localhost:18080/api/v1/deployments/health       # 200 - has RBAC
 ```
-
-All of the above was run against a real kind+Calico cluster while writing
-this, not just asserted in unit tests.
