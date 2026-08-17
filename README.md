@@ -89,6 +89,17 @@ they're asking for - so there's no separate token or secret to manage.
 `auth.enabled` is only used to disable auth for testing - it's on by
 default.
 
+**Logging.** Every rejected/denied caller (a missing/invalid token, an
+explicit RBAC deny, a failed TokenReview/SubjectAccessReview call) is logged
+server-side with the caller's identity, the resource/verb involved, and the
+reason - not just returned to the client - so there's an audit trail for
+probing or misconfigured RBAC, independent of `--log-level`. The bearer
+token itself is never logged. A one-line access log (method, path, status,
+latency) per HTTP request is also available, gated behind
+`--log-level=debug` / `logLevel: debug` since it's high-volume; `/healthz`
+and `/readyz` are excluded from it unconditionally, since kubelet probes hit
+them every few seconds and neither carries an auth outcome worth auditing.
+
 **RBAC scope.** Story 1 asks about all the deployments in the cluster, and
 story 2 needs to isolate workloads across arbitrary namespace pairs - both
 are inherently cross-namespace, so the ServiceAccount gets a

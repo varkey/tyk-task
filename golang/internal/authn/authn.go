@@ -20,6 +20,8 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/varkey/tyk-task/golang/internal/logging"
 )
 
 // ErrUnauthenticated indicates the request carried no usable credential.
@@ -33,6 +35,7 @@ var ErrUnauthenticated = errors.New("authentication failed")
 func Authenticate(ctx context.Context, clientset kubernetes.Interface, r *http.Request) (*authenticationv1.UserInfo, error) {
 	token, ok := bearerToken(r)
 	if !ok {
+		logging.Warnf("authn: rejected %s %s from %s: missing or malformed Authorization: Bearer <token> header", r.Method, r.URL.Path, r.RemoteAddr)
 		return nil, fmt.Errorf("%w: missing or malformed Authorization: Bearer <token> header", ErrUnauthenticated)
 	}
 
@@ -40,6 +43,7 @@ func Authenticate(ctx context.Context, clientset kubernetes.Interface, r *http.R
 		Spec: authenticationv1.TokenReviewSpec{Token: token},
 	}, metav1.CreateOptions{})
 	if err != nil {
+		logging.Errorf("authn: rejected %s %s from %s: token review failed: %v", r.Method, r.URL.Path, r.RemoteAddr, err)
 		return nil, fmt.Errorf("%w: token review failed: %v", ErrUnauthenticated, err)
 	}
 	if !review.Status.Authenticated {
@@ -47,6 +51,7 @@ func Authenticate(ctx context.Context, clientset kubernetes.Interface, r *http.R
 		if reason == "" {
 			reason = "token not authenticated"
 		}
+		logging.Warnf("authn: rejected %s %s from %s: %s", r.Method, r.URL.Path, r.RemoteAddr, reason)
 		return nil, fmt.Errorf("%w: %s", ErrUnauthenticated, reason)
 	}
 
@@ -73,7 +78,14 @@ func Authorize(ctx context.Context, clientset kubernetes.Interface, user authent
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
+		logging.Errorf("authz: subject access review failed for user=%s verb=%s resource=%s namespace=%s: %v",
+			user.Username, attrs.Verb, attrs.Resource, attrs.Namespace, err)
 		return false, "", fmt.Errorf("subject access review failed: %w", err)
+	}
+
+	if !review.Status.Allowed {
+		logging.Warnf("authz: denied user=%s verb=%s resource=%s namespace=%s: %s",
+			user.Username, attrs.Verb, attrs.Resource, attrs.Namespace, review.Status.Reason)
 	}
 
 	return review.Status.Allowed, review.Status.Reason, nil

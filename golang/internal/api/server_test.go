@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +25,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/varkey/tyk-task/golang/internal/logging"
 	"github.com/varkey/tyk-task/golang/internal/netpolicy"
 )
 
@@ -451,5 +454,43 @@ func TestIsolation_AuthEnabled(t *testing.T) {
 		authedRec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(authedRec, authedReq)
 		assert.Equal(t, http.StatusOK, authedRec.Code)
+	})
+}
+
+// captureLog redirects the standard "log" package's output (which
+// internal/logging writes through) to a buffer for the duration of the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &buf
+}
+
+func TestAccessLog(t *testing.T) {
+	s := &Server{Clientset: fake.NewSimpleClientset()}
+
+	t.Run("excludes /healthz and /readyz even at debug level", func(t *testing.T) {
+		logging.SetLevel(logging.LevelDebug)
+		t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
+		buf := captureLog(t)
+
+		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+		assert.Empty(t, buf.String())
+	})
+
+	t.Run("silent by default, logs at debug level", func(t *testing.T) {
+		buf := captureLog(t)
+
+		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/isolation", nil))
+		assert.Empty(t, buf.String(), "access log should be silent at the default (info) level")
+
+		logging.SetLevel(logging.LevelDebug)
+		t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
+
+		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/isolation", nil))
+		assert.Contains(t, buf.String(), "/api/v1/isolation")
 	})
 }

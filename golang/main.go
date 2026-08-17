@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/varkey/tyk-task/golang/internal/api"
 	"github.com/varkey/tyk-task/golang/internal/k8shealth"
+	"github.com/varkey/tyk-task/golang/internal/logging"
 )
 
 // buildVersion is stamped at build time via -ldflags "-X main.buildVersion=...".
@@ -28,15 +29,25 @@ func main() {
 		"comma-separated namespaces to operate within for deployment health and isolation list/delete; "+
 			"leave empty for cluster-wide (requires cluster-scoped RBAC - see the chart's rbac.clusterScoped/"+
 			"rbac.namespaces values, which set this flag automatically)")
+	logLevelFlag := flag.String("log-level", "info",
+		"minimum severity to log: debug, info, warn, or error. debug also turns on a line per HTTP request "+
+			"(excluding /healthz and /readyz); warn/error - which cover authentication and authorization "+
+			"failures - are always logged regardless of this setting.")
 
 	flag.Parse()
 
+	logLevel, err := logging.ParseLevel(*logLevelFlag)
+	if err != nil {
+		log.Fatalf("tyk-sre-assignment: %v", err)
+	}
+	logging.SetLevel(logLevel)
+
 	namespaces := parseNamespaces(*namespacesFlag)
 
-	fmt.Printf("tyk-sre-assignment %s starting\n", buildVersion)
+	logging.Infof("tyk-sre-assignment %s starting", buildVersion)
 
 	if !*authEnabled {
-		fmt.Println("WARNING: caller authentication/authorization is DISABLED (--auth-enabled=false); do not use this outside local testing")
+		logging.Warnf("caller authentication/authorization is DISABLED (--auth-enabled=false); do not use this outside local testing")
 	}
 
 	kConfig, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
@@ -56,18 +67,18 @@ func main() {
 	// of crash-looping the pod.
 	kubeVersion, err := k8shealth.GetKubernetesVersion(clientset)
 	if err != nil {
-		fmt.Printf("WARNING: could not reach the Kubernetes API server at startup: %v\n", err)
+		logging.Warnf("could not reach the Kubernetes API server at startup: %v", err)
 	} else {
-		fmt.Printf("Connected to Kubernetes %s\n", kubeVersion)
+		logging.Infof("Connected to Kubernetes %s", kubeVersion)
 	}
 
 	if len(namespaces) > 0 {
-		fmt.Printf("Operating in namespace-scoped mode: %s\n", strings.Join(namespaces, ", "))
+		logging.Infof("Operating in namespace-scoped mode: %s", strings.Join(namespaces, ", "))
 	}
 
 	server := &api.Server{Clientset: clientset, AuthEnabled: *authEnabled, Namespaces: namespaces}
 
-	fmt.Printf("Server listening on %s\n", *listenAddr)
+	logging.Infof("Server listening on %s", *listenAddr)
 	if err := http.ListenAndServe(*listenAddr, server.Handler()); err != nil {
 		panic(err)
 	}

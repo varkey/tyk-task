@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -21,6 +21,7 @@ import (
 	"github.com/varkey/tyk-task/golang/internal/apierr"
 	"github.com/varkey/tyk-task/golang/internal/authn"
 	"github.com/varkey/tyk-task/golang/internal/k8shealth"
+	"github.com/varkey/tyk-task/golang/internal/logging"
 	"github.com/varkey/tyk-task/golang/internal/netpolicy"
 )
 
@@ -63,7 +64,48 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/isolation", s.handleCreateIsolation)
 	mux.HandleFunc("DELETE /api/v1/isolation/{id}", s.handleDeleteIsolation)
 
-	return mux
+	return accessLog(mux)
+}
+
+// accessLog wraps every route except /healthz and /readyz with a single
+// debug-level audit line per request - method, path, status, latency, and
+// remote address. Those two are excluded unconditionally: kubelet probes hit
+// them every few seconds, so logging them would drown out everything else,
+// and neither carries an auth/authz outcome worth auditing (both are always
+// ungated - see AuthEnabled's doc comment).
+//
+// It only logs at debug (off by default; enable with --log-level=debug) -
+// auth/authz failures don't depend on it, since they self-log at their own
+// Warn/Error level directly from internal/authn regardless of this setting,
+// so a 401/403 is never silently dropped by leaving access logging off.
+func accessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || !logging.Enabled(logging.LevelDebug) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+		next.ServeHTTP(rec, r)
+
+		logging.Debugf("%s %s %s %d %s", r.Method, r.URL.Path, r.RemoteAddr, rec.status, time.Since(start))
+	})
+}
+
+// statusRecorder captures the status code a handler writes, since
+// http.ResponseWriter doesn't expose it and accessLog needs it after the
+// handler has already run. Defaults to 200: a handler that never calls
+// WriteHeader (e.g. via a bare w.Write) gets an implicit 200 from net/http.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
 }
 
 // protect wraps routes whose authorization is a single, statically
@@ -94,7 +136,7 @@ func listIsolationsAttrs(*http.Request) authorizationv1.ResourceAttributes {
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("ok")); err != nil {
-		fmt.Println("failed writing to response")
+		logging.Errorf("healthz: failed writing response: %v", err)
 	}
 }
 
@@ -111,7 +153,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		// CompareAndSwap only fires for the caller that observes the edge,
 		// so concurrent probes can't double-log it.
 		if s.apiUnreachable.CompareAndSwap(false, true) {
-			log.Printf("readyz: k8s API server unreachable: %v", err)
+			logging.Warnf("readyz: k8s API server unreachable: %v", err)
 		}
 
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
@@ -122,7 +164,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.apiUnreachable.CompareAndSwap(true, false) {
-		log.Println("readyz: k8s API server reachable again")
+		logging.Infof("readyz: k8s API server reachable again")
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
