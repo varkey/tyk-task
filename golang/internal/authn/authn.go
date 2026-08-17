@@ -35,7 +35,11 @@ var ErrUnauthenticated = errors.New("authentication failed")
 func Authenticate(ctx context.Context, clientset kubernetes.Interface, r *http.Request) (*authenticationv1.UserInfo, error) {
 	token, ok := bearerToken(r)
 	if !ok {
-		logging.Warnf("authn: rejected %s %s from %s: missing or malformed Authorization: Bearer <token> header", r.Method, r.URL.Path, r.RemoteAddr)
+		// "no bearer token presented", not "missing Authorization header": the
+		// latter reads, at a skim, like an authorization (permissions)
+		// failure rather than authentication - easy to mistake for an authz:
+		// line, especially with one right above/below it in the log stream.
+		logging.Warnf("authn: rejected %s %s from %s: no bearer token presented", r.Method, r.URL.Path, r.RemoteAddr)
 		return nil, fmt.Errorf("%w: missing or malformed Authorization: Bearer <token> header", ErrUnauthenticated)
 	}
 
