@@ -470,27 +470,33 @@ func captureLog(t *testing.T) *bytes.Buffer {
 func TestAccessLog(t *testing.T) {
 	s := &Server{Clientset: fake.NewSimpleClientset()}
 
-	t.Run("excludes /healthz and /readyz even at debug level", func(t *testing.T) {
-		logging.SetLevel(logging.LevelDebug)
-		t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
+	t.Run("healthz/readyz are silent by default, log only at debug", func(t *testing.T) {
 		buf := captureLog(t)
 
 		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
 		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
-
 		assert.Empty(t, buf.String())
-	})
-
-	t.Run("silent by default, logs at debug level", func(t *testing.T) {
-		buf := captureLog(t)
-
-		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/isolation", nil))
-		assert.Empty(t, buf.String(), "access log should be silent at the default (info) level")
 
 		logging.SetLevel(logging.LevelDebug)
 		t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
 
+		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		assert.Contains(t, buf.String(), "/healthz")
+	})
+
+	t.Run("other routes log at the default (info) level", func(t *testing.T) {
+		buf := captureLog(t)
+
 		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/isolation", nil))
 		assert.Contains(t, buf.String(), "/api/v1/isolation")
+	})
+
+	t.Run("other routes are silent once the level is raised above info", func(t *testing.T) {
+		logging.SetLevel(logging.LevelWarn)
+		t.Cleanup(func() { logging.SetLevel(logging.LevelInfo) })
+		buf := captureLog(t)
+
+		s.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/isolation", nil))
+		assert.Empty(t, buf.String())
 	})
 }

@@ -67,20 +67,25 @@ func (s *Server) Handler() http.Handler {
 	return accessLog(mux)
 }
 
-// accessLog wraps every route except /healthz and /readyz with a single
-// debug-level audit line per request - method, path, status, latency, and
-// remote address. Those two are excluded unconditionally: kubelet probes hit
-// them every few seconds, so logging them would drown out everything else,
-// and neither carries an auth/authz outcome worth auditing (both are always
-// ungated - see AuthEnabled's doc comment).
+// accessLog wraps every route with a single audit line per request - method,
+// path, status, latency, and remote address. /healthz and /readyz log only
+// at debug (opt-in, off by default): kubelet probes hit them every few
+// seconds, so logging them at the default level would drown out everything
+// else, and neither carries an auth/authz outcome worth auditing (both are
+// always ungated - see AuthEnabled's doc comment). Every other route logs at
+// info, visible by default, since actual API traffic is comparatively
+// low-volume and worth seeing without turning on full debug logging.
 //
-// It only logs at debug (off by default; enable with --log-level=debug) -
-// auth/authz failures don't depend on it, since they self-log at their own
-// Warn/Error level directly from internal/authn regardless of this setting,
-// so a 401/403 is never silently dropped by leaving access logging off.
+// Auth/authz failures don't depend on this at all - they self-log at their
+// own Warn/Error level directly from internal/authn, so a 401/403 is never
+// silently dropped by this or any other level setting.
 func accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || !logging.Enabled(logging.LevelDebug) {
+		level, logf := logging.LevelInfo, logging.Infof
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			level, logf = logging.LevelDebug, logging.Debugf
+		}
+		if !logging.Enabled(level) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -90,7 +95,7 @@ func accessLog(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rec, r)
 
-		logging.Debugf("%s %s %s %d %s", r.Method, r.URL.Path, r.RemoteAddr, rec.status, time.Since(start))
+		logf("%s %s %s %d %s", r.Method, r.URL.Path, r.RemoteAddr, rec.status, time.Since(start))
 	})
 }
 

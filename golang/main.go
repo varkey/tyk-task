@@ -30,9 +30,10 @@ func main() {
 			"leave empty for cluster-wide (requires cluster-scoped RBAC - see the chart's rbac.clusterScoped/"+
 			"rbac.namespaces values, which set this flag automatically)")
 	logLevelFlag := flag.String("log-level", "info",
-		"minimum severity to log: debug, info, warn, or error. debug also turns on a line per HTTP request "+
-			"(excluding /healthz and /readyz); warn/error - which cover authentication and authorization "+
-			"failures - are always logged regardless of this setting.")
+		"minimum severity to log: debug, info, warn, or error. At the default (info) every request logs a "+
+			"one-line access record except /healthz and /readyz, which kubelet probes every few seconds and "+
+			"only log at debug; warn/error - which cover authentication and authorization failures - are "+
+			"always logged regardless of this setting.")
 
 	flag.Parse()
 

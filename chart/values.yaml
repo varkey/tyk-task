@@ -48,11 +48,12 @@ kubeconfig: ""
 # Minimum severity the app logs at: debug, info, warn, or error. Threaded
 # through to the container as --log-level=<value>.
 #
-# debug also turns on a line per HTTP request (excluding /healthz and
-# /readyz, which kubelet probes every few seconds). warn/error - which cover
-# rejected/denied callers, i.e. authentication and authorization failures -
-# are always logged regardless of this setting, so leaving this at the
-# default never hides a security-relevant event, only the verbose access log.
+# At this default, every request gets a one-line access record except
+# /healthz and /readyz, which kubelet probes every few seconds and only log
+# at debug. warn/error - which cover rejected/denied callers, i.e.
+# authentication and authorization failures - are always logged regardless
+# of this setting, so leaving this at the default never hides a
+# security-relevant event.
 logLevel: info
 
 # HTTP paths and timing probed by the Deployment. /readyz performs a live
