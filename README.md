@@ -16,7 +16,7 @@ chart. No UI - see [Decisions & tradeoffs](#decisions--tradeoffs).
 | 1 | Are all Deployments as healthy as their spec asks for? | `GET /api/v1/deployments/health` |
 | 2 | Cut off network traffic between two workloads, on demand | `POST` / `DELETE /api/v1/isolation` |
 | 3 | Always know if this tool can reach the API server | `GET /readyz`, wired as the Deployment's readiness probe |
-| 4 | Build a container image on push to `main` | `.github/workflows/ci.yml` |
+| 4 | Build a container image on push to `main` | `.github/workflows/ci-golang.yml`'s `build-image` job |
 | 5 | Deploy via Helm | `chart/` |
 
 ## Getting started
