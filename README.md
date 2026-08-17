@@ -44,8 +44,8 @@ All bodies are JSON.
 cd golang && go test ./... -race -cover
 ```
 
-Current coverage: `internal/k8shealth` 100%, `internal/authn` 95%,
-`internal/api` 85%, `internal/netpolicy` 90%.
+Current coverage: `internal/k8shealth` 100%, `internal/authn` 96%,
+`internal/api` 87%, `internal/netpolicy` 91%, `internal/logging` 77%.
 
 ## CI/CD
 
