@@ -45,6 +45,17 @@ auth:
 # the in-cluster config derived from serviceAccount is used instead.
 kubeconfig: ""
 
+# Minimum severity the app logs at: debug, info, warn, or error. Threaded
+# through to the container as --log-level=<value>.
+#
+# At this default, every request gets a one-line access record except
+# /healthz and /readyz, which kubelet probes every few seconds and only log
+# at debug. warn/error - which cover rejected/denied callers, i.e.
+# authentication and authorization failures - are always logged regardless
+# of this setting, so leaving this at the default never hides a
+# security-relevant event.
+logLevel: info
+
 # HTTP paths and timing probed by the Deployment. /readyz performs a live
 # check against the Kubernetes API server (story 3), so pod Ready status in
 # `kubectl get pods` directly reflects whether this tool can currently reach

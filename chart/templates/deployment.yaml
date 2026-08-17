@@ -35,6 +35,7 @@ spec:
           args:
             - --address=:{{ .Values.service.port }}
             - --auth-enabled={{ .Values.auth.enabled }}
+            - --log-level={{ .Values.logLevel }}
             {{- if .Values.kubeconfig }}
             - --kubeconfig={{ .Values.kubeconfig }}
             {{- end }}
